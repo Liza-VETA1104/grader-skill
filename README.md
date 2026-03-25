@@ -1,4 +1,4 @@
-# Grader-Skill: ETL-пайплайн для аналитики грэйдера
+# Grader-pipeline: ETL-пайплайн для аналитики грэйдера
 
 
 
@@ -56,7 +56,7 @@
 ### 1. Клонирование репозитория
 
 ```bash
-git clone https://github.com/Liza-VETA1104/grader-skill.git
+git clone https://github.com/Liza-VETA1104/grader-pipeline.git
 cd grader-skill
  ``` 
 
