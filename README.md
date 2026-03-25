@@ -10,8 +10,8 @@
 
 - [Возможности](#-возможности)
 - [Технологии](#-технологии)
-- [⚙️ Установка](#-установка)
-- [🔧 Настройка](#-настройка)
+- [Установка](#-установка)
+- [Настройка](#-настройка)
 - [🗄 Структура базы данных](#-структура-базы-данных)
 - [🚀 Запуск](#-запуск)
 - [📊 Примеры работы](#-примеры-работы)
@@ -49,26 +49,39 @@
 
   ---
 
- ## Установка
+
+## Установка
 
 ### 1. Клонирование репозитория
 
 ```bash
-git clone [[<ссылка-на-репозиторий>](https://github.com/Liza-VETA1104/grader-skill)]
+git clone https://github.com/Liza-VETA1104/grader-skill.git
 cd grader-skill
+ ``` 
 
 ### 2.  Создание виртуального окружения
-# Windows
+## Windows
+```bash
 python -m venv venv
 venv\Scripts\activate
+```
 
-# Linux/Mac
+## Linux/Mac
+```bash
 python3 -m venv venv
 source venv/bin/activate
+```
 
 ### 3. Установка зависимостей
+```bash
 pip install -r requirements.txt
+```
 
+---
+
+## Настройка
+
+###1. Создайте файл .env
 
 
 
