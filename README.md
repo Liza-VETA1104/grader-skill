@@ -58,7 +58,6 @@ git clone [<ссылка-на-репозиторий>](https://github.com/Liza-V
 cd grader-skill
 
 ### 2.  Создание виртуального окружения
-```bash
 # Windows
 python -m venv venv
 venv\Scripts\activate
@@ -68,7 +67,6 @@ python3 -m venv venv
 source venv/bin/activate
 
 ### 3. Установка зависимостей
-```bash
 pip install -r requirements.txt
 
 
