@@ -54,7 +54,7 @@
 ### 1. Клонирование репозитория
 
 ```bash
-git clone [<ссылка-на-репозиторий>](https://github.com/Liza-VETA1104/grader-skill)
+git clone [[<ссылка-на-репозиторий>](https://github.com/Liza-VETA1104/grader-skill)]
 cd grader-skill
 
 ### 2.  Создание виртуального окружения
