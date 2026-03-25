@@ -82,7 +82,7 @@ pip install -r requirements.txt
 ## Настройка
 
 ###1. Создайте файл .env
-
+[Пример]
 
 
 
