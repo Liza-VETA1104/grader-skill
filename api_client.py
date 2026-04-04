@@ -1,20 +1,26 @@
 import requests
+import logging
 import os
 from dotenv import load_dotenv
-from logger import setup_logger
 
-logger = setup_logger()
 load_dotenv()
 
-# Параметры API
-API_URL = "https://b2b.itresume.ru/api/statistics"
-CLIENT = "Skillfactory"
-CLIENT_KEY = "M2MGWS"
+logger = logging.getLogger(__name__)
 
-def fetch_data(start_date: str, end_date: str):
+# Параметры API из .env
+API_URL = os.getenv("API_URL")
+CLIENT = os.getenv("CLIENT")
+CLIENT_KEY = os.getenv("CLIENT_KEY")
+
+# Проверка, что переменные загрузились
+if not API_URL or not CLIENT or not CLIENT_KEY:
+    logger.error("❌ Ошибка: не загружены переменные окружения (API_URL, CLIENT, CLIENT_KEY)")
+    logger.error("   Проверьте файл .env")
+
+
+def fetch_data(start_date: str, end_date: str) -> list:
     """
-    Получает данные из API
-    start_date, end_date: строки в формате 'YYYY-MM-DD HH:MM:SS.ffffff'
+    Получает данные из API.
     """
     logger.info(f"📥 Начало загрузки данных: {start_date} → {end_date}")
     
@@ -36,32 +42,4 @@ def fetch_data(start_date: str, end_date: str):
         if hasattr(e, 'response') and e.response is not None:
             logger.error(f"Status code: {e.response.status_code}")
         return []
-
-# Тестовый запуск
-if __name__ == "__main__":
-    from datetime import datetime, timedelta
-    
-    # Берём данные за последние 24 часа
-    end_dt = datetime.utcnow()
-    start_dt = end_dt - timedelta(hours=1)
-    
-    data = fetch_data(
-        start_dt.strftime('%Y-%m-%d %H:%M:%S.%f'),
-        end_dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-    )
-    
-    if data:
-        logger.info(f"📄 Первая запись: {data[0]}")
-    else:
-        logger.warning("⚠️ Данные не получены")
-
-        # Тестируем парсинг
-    if data:
-        first_record = data[0]
-        logger.info(f"📄 Исходный passback_params: {first_record.get('passback_params')[:100]}...")
         
-        from data_processor import parse_passback_params
-        parsed = parse_passback_params(first_record.get('passback_params', ''))
-        
-        logger.info(f"✅ Распарсено: oauth_consumer_key='{parsed.get('oauth_consumer_key')}'")
-        logger.info(f"✅ lis_result_sourcedid='{parsed.get('lis_result_sourcedid')[:50]}...'")    
