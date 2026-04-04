@@ -58,52 +58,66 @@ def convert_created_at(value):
 
 
 def load_to_database(records: list) -> int:
-    """Загрузка в PostgreSQL"""
+    """Загружает уже валидированные записи в БД (batch insert)"""
     if not records:
         logger.warning("⚠️ Нет записей для загрузки")
         return 0
     
     loaded = 0
     errors = 0
+    duplicates_skipped = 0
     
     try:
         with psycopg2.connect(**DB_PARAMS) as conn:
+            batch_data = []
+            
             for idx, record in enumerate(records):
                 try:
-                    # Конвертация данных
                     is_correct_value = convert_is_correct(record['is_correct'])
                     created_at_value = convert_created_at(record['created_at'])
-                    
                     passback = record.get('passback_parsed', {})
+                                                          
+                    batch_data.append((
+                        record['lti_user_id'].strip(),
+                        passback['oauth_consumer_key'],
+                        passback.get('lis_result_sourcedid'),
+                        passback.get('lis_outcome_service_url'),
+                        is_correct_value,
+                        record.get('attempt_type'),
+                        created_at_value
+                    ))
                     
-                    with conn.cursor() as cur:
-                        cur.execute("""
-                            INSERT INTO grader_attempts 
-                            (user_id, oauth_consumer_key, lis_result_sourcedid, 
-                             lis_outcome_service_url, is_correct, attempt_type, created_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """, (
-                            record['lti_user_id'],
-                            passback['oauth_consumer_key'],
-                            passback['lis_result_sourcedid'],
-                            passback['lis_outcome_service_url'],
-                            is_correct_value,
-                            record['attempt_type'],
-                            created_at_value
-                        ))
-                        conn.commit()
-                        loaded += 1
-                        
-                except psycopg2.Error as e:
-                    conn.rollback()
+                except Exception as e:
                     errors += 1
-                    if errors <= 5:
-                        logger.warning(f"⚠️ Ошибка при загрузке записи #{idx}: {e}")
-                    elif errors == 6:
-                        logger.warning("⚠️ ... и другие ошибки")
-                        
-        logger.info(f"✅ Загружено записей: {loaded}, ошибок: {errors}")
-        return loaded
+                    logger.warning(f"⚠️ Ошибка подготовки записи #{idx}: {e}")
+            
+            # 🔥 Батчевая вставка
+            if batch_data:
+                with conn.cursor() as cur:
+                    # Вариант 1: с ON CONFLICT (если индекс есть)
+                    cur.executemany("""
+                        INSERT INTO grader_attempts 
+                        (user_id, oauth_consumer_key, lis_result_sourcedid, 
+                         lis_outcome_service_url, is_correct, attempt_type, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (user_id, lis_result_sourcedid, created_at) 
+                        DO NOTHING
+                    """, batch_data)
+                    
+                    # Вариант 2: без ON CONFLICT (если индекса нет)
+                    # cur.executemany("""INSERT ... VALUES (%s, ...)""", batch_data)
+                    
+                    loaded = cur.rowcount
+                    duplicates_skipped = len(batch_data) - loaded
+                    conn.commit()
+            
+            # 🔥 Логируем результат
+            log_msg = f"✅ Загружено: {loaded}, ошибок: {errors}"
+            if duplicates_skipped > 0:
+                log_msg += f", пропущено дублей: {duplicates_skipped}"
+            logger.info(log_msg)
+            
+            return loaded
         
     except Exception as e:
         logger.error(f"❌ Критическая ошибка подключения к БД: {e}")
@@ -228,67 +242,134 @@ def log_statistics(stats: dict):
 
 def main():
     logger.info("Запуск основного скрипта")
-    
-    end_dt = datetime.now(timezone.utc)
-    start_dt = end_dt - timedelta(hours=24)
-    
-    # 1. Получение данных из API
-    raw_data = fetch_data(
-        start_dt.strftime('%Y-%m-%d %H:%M:%S.%f'),
-        end_dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-    )
+
+    try:
+        end_dt = datetime.now(timezone.utc)
+        start_dt = end_dt - timedelta(hours=24)
+        
+        # 1. Получение данных из API
+        raw_data = fetch_data(
+            start_dt.strftime('%Y-%m-%d %H:%M:%S.%f'),
+            end_dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения данных: {e}")
+        return
+
     
     if not raw_data:
         logger.warning("⚠️ Данные не получены")
         return
             
     # 2. Обработка и валидация
+    
     valid_records = []
     skipped_records = []
-    
-    for idx, record in enumerate(raw_data):
-        is_valid, error = validate_record(record)
-        if is_valid:
-            record['passback_parsed'] = parse_passback_params(record.get('passback_params', ''))
+
+    try:   
+        for idx, record in enumerate(raw_data):
+            # Проверка lti_user_id
+            if not record.get('lti_user_id'):
+                logger.warning(f"⚠️ Пропущена запись #{idx}: нет lti_user_id")
+                skipped_records.append(record)
+                continue
+            
+            # Проверка attempt_type
+            attempt_type = record.get('attempt_type')
+            if attempt_type not in ['run', 'submit']:
+                logger.warning(f"⚠️ Пропущена запись #{idx}: неверный attempt_type='{attempt_type}'")
+                skipped_records.append(record)
+                continue
+            
+            # Проверка passback_params
+            if not record.get('passback_params'):
+                logger.warning(f"⚠️ Пропущена запись #{idx}: нет passback_params")
+                skipped_records.append(record)
+                continue
+            
+            # Парсинг passback
+            passback = parse_passback_params(record.get('passback_params', ''))
+            
+            # Проверка, что распарсилось в словарь с обязательными полями
+            if not isinstance(passback, dict):
+                logger.warning(f"⚠️ Пропущена запись #{idx}: passback не является словарем (тип: {type(passback).__name__})")
+                skipped_records.append(record)
+                continue
+            required = ['lis_result_sourcedid', 'lis_outcome_service_url']
+            missing_fields = [field for field in required if not passback.get(field)]
+
+            if missing_fields:
+                logger.warning(f"⚠️ Пропущена запись #{idx}: отсутствуют обязательные поля passback: {missing_fields}")
+                skipped_records.append(record)
+                continue
+            
+            record['passback_parsed'] = passback
             valid_records.append(record)
-        else:
-            logger.warning(f"⚠️ Пропущена запись #{idx}: {error}")
-            skipped_records.append(record)
-    
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка валидации: {e}")
+        return
+
     logger.info(f"✅ Валидных записей: {len(valid_records)} из {len(raw_data)}")
     
     # 3. Сохранение пропущенных записей
-    with open('skipped_records.json', 'w', encoding='utf-8') as f:
-        json.dump(skipped_records, f, ensure_ascii=False, indent=2)
-    logger.info(f"💾 Пропущенные записи сохранены в skipped_records.json ({len(skipped_records)} шт.)")
+    try: 
+        with open('skipped_records.json', 'w', encoding='utf-8') as f:
+            json.dump(skipped_records, f, ensure_ascii=False, indent=2)
+        logger.info(f"💾 Пропущенные записи сохранены в skipped_records.json ({len(skipped_records)} шт.)")    
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения skipped_records: {e}")
+
+        
+    if not valid_records:
+        logger.warning("⚠️ Нет валидных записей. Завершение.")
+        return
     
     # 4. Загрузка в БД
-    load_to_database(valid_records)
+   
+    loaded = load_to_database(valid_records)
+    if loaded == 0:
+        logger.warning("⚠️ Ни одной записи не загружено")
     
     # 5. Рассчет и логирование статистики
-    stats = calculate_statistics(valid_records)
-    log_statistics(stats)
+    try:
+        stats = calculate_statistics(valid_records)
+        log_statistics(stats)
+    except Exception as e:
+        logger.error(f"❌ Ошибка расчёта статистики: {e}")
+        return
     
     # 6. Загрузка в Google Sheets
     if stats:
-        from sheets_helper import upload_to_sheets
-        
-        upload_to_sheets(
+        try:    
+            from sheets_helper import upload_to_sheets
+            
+            upload_to_sheets(
             stats=stats,
-            credentials_file='grader-analytics-5083d7745be8.json',
-            spreadsheet_id='1-3LFWxDjmicXsWSZxxOjaYclEW6jooTbFm2LSuqT4eo',
-            sheet_name='Лист1'
+            credentials_file=os.getenv('GS_CREDENTIALS_FILE'),
+            spreadsheet_id=os.getenv('GS_SPREADSHEET_ID'),
+            sheet_name=os.getenv('GS_SHEET_NAME')
         )
+        except ImportError:
+            logger.warning("⚠️ Модуль sheets_helper не найден")
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки в Google Sheets: {e}")    
+
 
     # 7. Отправка email с отчётом
     if stats:
-        from email_helper import send_email_report
-        
-        send_email_report(
-            stats=stats,
-            subject=f"📊 Грэйдер-скилл: {stats.get('date', 'N/A')}"
-        )
-    
+        try:
+            from email_helper import send_email_report
+            
+            send_email_report(
+                stats=stats,
+                subject=f"📊 Грэйдер-скилл: {stats.get('date', 'N/A')}"
+            )
+        except ImportError:
+            logger.warning("⚠️ Модуль email_helper не найден")
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки email: {e}")
+
     logger.info("🏁 Скрипт завершил работу")
 
 
