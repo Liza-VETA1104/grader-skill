@@ -12,3 +12,5 @@ CREATE TABLE grader_attempts (
 -- Индексы для ускорения поиска
 CREATE INDEX idx_user_id ON grader_attempts(user_id);
 CREATE INDEX idx_created_at ON grader_attempts(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_attempt 
+ON grader_attempts(user_id, lis_result_sourcedid, created_at);
